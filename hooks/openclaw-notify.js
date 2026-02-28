@@ -155,7 +155,7 @@ if (existingThread) {
       'message', 'thread', 'create',
       '--channel', 'discord',
       '--target', DISCORD_CHANNEL,
-      '--thread-name', `🤖 ${sessionName}`,
+      '--thread-name', sessionName,
       '--message', initialMsg,
       '--json'
     ], { encoding: 'utf8', timeout: 8000 });
