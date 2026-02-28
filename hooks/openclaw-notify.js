@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync, spawnSync } = require('child_process');
 
-const DISCORD_CHANNEL = '1476953824911425617'; // #dev-4
+const DISCORD_CHANNEL_DEFAULT = '1476953824911425617'; // #dev-4 fallback
 const DISCORD_MENTION = '<@1080149602520547368>'; // Trevor
 const OPENCLAW = '/opt/homebrew/bin/openclaw';
 const TMPDIR = process.env.TMPDIR || '/tmp';
@@ -58,6 +58,17 @@ if (!['idle_prompt', 'elicitation_dialog', 'permission_prompt'].includes(notific
 // Convention: claude-<project-folder-name>
 const projectName = path.basename(cwd);
 const sessionName = `claude-${projectName}`;
+
+// Read per-session Discord channel config (written by MAIN when starting session)
+let DISCORD_CHANNEL = DISCORD_CHANNEL_DEFAULT;
+try {
+  const configFile = `/tmp/relay-config-${sessionName}.json`;
+  const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  if (config.discordChannel) {
+    DISCORD_CHANNEL = config.discordChannel;
+    log(`Using channel from config: ${DISCORD_CHANNEL}`);
+  }
+} catch(e) { /* no config file — use default */ }
 
 // Write pending relay state file
 const stateFile = `/tmp/pending-relay-${sessionName}.json`;
