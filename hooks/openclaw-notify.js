@@ -11,7 +11,8 @@ const { execSync, spawnSync } = require('child_process');
 
 const DISCORD_CHANNEL = '1476953824911425617'; // #dev-4
 const OPENCLAW = '/opt/homebrew/bin/openclaw';
-const SOCKET = '/tmp/clawdbot-tmux-sockets/clawdbot.sock';
+const TMPDIR = process.env.TMPDIR || '/tmp';
+const SOCKET = `${TMPDIR}clawdbot-tmux-sockets/clawdbot.sock`;
 const LOG = '/tmp/openclaw-notify-debug.log';
 
 function log(msg) {
@@ -100,33 +101,104 @@ try {
 }
 
 // Format Discord notification
-const shortPane = paneContext.slice(-600); // keep it readable
-const discordMsg = [
-  `🤖 **${sessionName}** needs your input`,
-  `\`\`\``,
-  shortPane || message,
-  `\`\`\``,
-  `Reply with a number or free text — I'll route it back.`,
-  `_(session: ${sessionName})_`
-].join('\n');
+const shortPane = paneContext.slice(-800).trim();
+const notifBody = shortPane || message;
 
-// Send Discord notification DIRECTLY
-log(`Sending Discord notification to channel ${DISCORD_CHANNEL}...`);
+// Check for an existing open thread for this session
+const threadFile = `/tmp/discord-thread-${sessionName}.json`;
+let existingThread = null;
 try {
-  const result = spawnSync(OPENCLAW, [
-    'message', 'send',
-    '--channel', 'discord',
-    '--target', DISCORD_CHANNEL,
-    '--message', discordMsg
-  ], { encoding: 'utf8', timeout: 8000 });
-
-  if (result.status === 0) {
-    log(`Discord send OK`);
-  } else {
-    log(`Discord send failed (code ${result.status}): ${result.stderr?.slice(0, 200)}`);
+  const tf = JSON.parse(fs.readFileSync(threadFile, 'utf8'));
+  // Only reuse thread if it's less than 2 hours old
+  if (Date.now() - tf.createdAt < 2 * 60 * 60 * 1000) {
+    existingThread = tf;
   }
-} catch (e) {
-  log(`Discord send exception: ${e.message}`);
+} catch(e) {}
+
+if (existingThread) {
+  // Post follow-up into the existing thread
+  log(`Reusing thread ${existingThread.threadId} for ${sessionName}`);
+  const followupMsg = [
+    `🤖 **${sessionName}** needs input again`,
+    `\`\`\``,
+    notifBody,
+    `\`\`\``,
+    `Reply here to route back.`
+  ].join('\n');
+
+  try {
+    const result = spawnSync(OPENCLAW, [
+      'message', 'thread', 'reply',
+      '--channel', 'discord',
+      '--target', existingThread.threadId,
+      '--message', followupMsg
+    ], { encoding: 'utf8', timeout: 8000 });
+    log(`Thread reply status: ${result.status} stderr: ${result.stderr?.slice(0,100)}`);
+  } catch(e) {
+    log(`Thread reply failed: ${e.message}`);
+  }
+
+} else {
+  // Create a new thread for this session
+  const initialMsg = [
+    `🤖 **${sessionName}** is waiting for input`,
+    `\`\`\``,
+    notifBody,
+    `\`\`\``,
+    `Reply with a number or free text — I'll route it back.`,
+    `_session: \`${sessionName}\` | socket: \`${SOCKET}\`_`
+  ].join('\n');
+
+  log(`Creating Discord thread for ${sessionName}...`);
+  try {
+    const result = spawnSync(OPENCLAW, [
+      'message', 'thread', 'create',
+      '--channel', 'discord',
+      '--target', DISCORD_CHANNEL,
+      '--thread-name', `🤖 ${sessionName}`,
+      '--message', initialMsg,
+      '--json'
+    ], { encoding: 'utf8', timeout: 8000 });
+
+    if (result.status === 0) {
+      log(`Thread created OK`);
+      // Parse thread ID from JSON output and save for reuse
+      try {
+        const out = JSON.parse(result.stdout);
+        const threadId = out?.payload?.thread?.id;
+        if (threadId) {
+          fs.writeFileSync(threadFile, JSON.stringify({
+            threadId,
+            sessionName,
+            createdAt: Date.now()
+          }));
+          log(`Thread ID saved: ${threadId}`);
+        } else {
+          log(`Thread ID not found in output: ${result.stdout?.slice(0,200)}`);
+        }
+      } catch(e) { log(`Could not parse thread ID: ${e.message} stdout: ${result.stdout?.slice(0,100)}`); }
+    } else {
+      // Thread creation failed — fall back to direct channel message
+      log(`Thread create failed (${result.status}), falling back to channel message`);
+      log(`stderr: ${result.stderr?.slice(0, 200)}`);
+      const fallbackMsg = [
+        `🤖 **${sessionName}** needs input`,
+        `\`\`\``,
+        notifBody,
+        `\`\`\``,
+        `Reply with: \`relay ${sessionName}: <your reply>\``
+      ].join('\n');
+      spawnSync(OPENCLAW, [
+        'message', 'send',
+        '--channel', 'discord',
+        '--target', DISCORD_CHANNEL,
+        '--message', fallbackMsg
+      ], { encoding: 'utf8', timeout: 8000 });
+      log(`Fallback channel message sent`);
+    }
+  } catch (e) {
+    log(`Thread create exception: ${e.message}`);
+  }
 }
 
 process.exit(0);
