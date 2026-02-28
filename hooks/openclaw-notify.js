@@ -89,27 +89,36 @@ try {
   log(`State file write failed: ${e.message}`);
 }
 
-// Capture tmux pane for context (the actual question + options Claude is showing)
+// Capture tmux pane — retry up to 4x with 1s delay if pane comes back empty
 let paneContext = '';
-try {
-  const result = spawnSync('tmux', [
-    '-S', SOCKET,
-    'capture-pane', '-p', '-J',
-    '-t', `${sessionName}:0.0`,
-    '-S', '-20'
-  ], { encoding: 'utf8', timeout: 3000 });
-  if (result.stdout) {
-    // Extract the meaningful last lines — question + options
-    paneContext = result.stdout
-      .split('\n')
-      .filter(l => l.trim())
-      .slice(-40)
-      .join('\n');
+for (let attempt = 0; attempt < 4; attempt++) {
+  try {
+    if (attempt > 0) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+    }
+    const result = spawnSync('tmux', [
+      '-S', SOCKET,
+      'capture-pane', '-p', '-J',
+      '-t', `${sessionName}:0.0`,
+      '-S', '-40'
+    ], { encoding: 'utf8', timeout: 3000 });
+    if (result.stdout) {
+      const lines = result.stdout.split('\n').filter(l => l.trim());
+      if (lines.length > 2) {
+        paneContext = lines.slice(-40).join('\n');
+        log(`Pane captured attempt ${attempt + 1}: ${paneContext.length} chars`);
+        break;
+      }
+    }
+    log(`Pane empty attempt ${attempt + 1}, retrying...`);
+  } catch (e) {
+    log(`Pane capture error: ${e.message}`);
+    break;
   }
-  log(`Pane captured: ${paneContext.length} chars`);
-} catch (e) {
-  log(`Pane capture failed: ${e.message}`);
+}
+if (!paneContext) {
   paneContext = message;
+  log('Pane capture gave up — using message fallback');
 }
 
 // --- Pane Formatter ---
