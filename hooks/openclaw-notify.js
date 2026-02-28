@@ -92,7 +92,7 @@ try {
     paneContext = result.stdout
       .split('\n')
       .filter(l => l.trim())
-      .slice(-15)
+      .slice(-40)
       .join('\n');
   }
   log(`Pane captured: ${paneContext.length} chars`);
@@ -113,39 +113,101 @@ function formatPane(raw) {
     .map(l => l.replace(/[━─┌┐└┘├┤┬┴┼│╔╗╚╝╠╣╦╩╬═]/g, '').trim())
     .filter(l => l.length > 0);
 
-  // Filter out pure decoration / GSD banner lines
+  // Filter out noise lines
   const meaningful = lines.filter(l =>
     !l.match(/^GSD\s*[►▶]/) &&
     !l.match(/^[░▒▓█\s]+$/) &&
     !l.match(/^⏵⏵/) &&
     !l.match(/^⬆/) &&
+    !l.match(/^✻\s+Churned/) &&
+    !l.match(/^❯\s*$/) &&
     !l.match(/^\d+%$/)
   );
 
   const parts = [];
   let foundContent = false;
 
-  // Next Up section
-  const nextUpIdx = meaningful.findIndex(l => /next\s*up/i.test(l));
-  if (nextUpIdx >= 0) {
-    parts.push('**▶ Next up:**');
-    const nextLines = meaningful.slice(nextUpIdx + 1, nextUpIdx + 6)
-      .filter(l => l && !l.match(/^[─\s]+$/) && !/also\s*available/i.test(l) && !l.match(/^\/gsd:/) && !l.startsWith('-'))
-      .slice(0, 4);
-    nextLines.forEach(l => parts.push(`> ${l}`));
+  // ── Checkpoint / Human Verify ──────────────────────────────────────────────
+  const checkpointIdx = meaningful.findIndex(l => /checkpoint|human.?verify/i.test(l));
+  if (checkpointIdx >= 0) {
+    // Plan title
+    const planLine = meaningful.slice(checkpointIdx, checkpointIdx + 4).find(l => /^Plan:/i.test(l));
+    if (planLine) parts.push(`**🔍 ${planLine}**`);
+    else parts.push(`**🔍 Human Checkpoint**`);
+
+    // What's ready summary
+    const readyIdx = meaningful.findIndex(l => /what.?s ready/i.test(l));
+    if (readyIdx >= 0) {
+      // Include inline content from "What's ready: <text>" line itself
+      const inlineSummary = meaningful[readyIdx].replace(/what.?s ready:\s*/i, '').trim();
+      const continuationLines = meaningful.slice(readyIdx + 1, readyIdx + 4)
+        .filter(l => !l.match(/^---/) && !/to verify|run this/i.test(l) && l.length > 0).slice(0, 2);
+      const readyLines = [inlineSummary, ...continuationLines].filter(Boolean).slice(0, 2);
+      if (readyLines.length) {
+        parts.push('');
+        parts.push('**✅ What\'s ready:**');
+        readyLines.forEach(l => parts.push(`> ${l}`));
+      }
+    }
+
+    // Verification commands
+    const verifyIdx = meaningful.findIndex(l => /to verify|run this/i.test(l));
+    if (verifyIdx >= 0) {
+      const cmds = meaningful.slice(verifyIdx + 1, verifyIdx + 6)
+        .filter(l => l.match(/^(cd |npm |yarn |bun |npx |http)/i)).slice(0, 3);
+      if (cmds.length) {
+        parts.push('');
+        parts.push('**🖥 Verify:**');
+        cmds.forEach(c => parts.push(`\`${c}\``));
+      }
+    }
+
+    // Expected reply
+    const replyIdx = meaningful.findIndex(l => /type\s+["']?\w/i.test(l));
+    if (replyIdx >= 0) {
+      parts.push('');
+      parts.push('**💬 Reply:** ' + meaningful[replyIdx].replace(/^Type\s+/i, ''));
+    }
+
     foundContent = true;
   }
 
-  // GSD commands
-  const gsdCmds = meaningful.filter(l => l.match(/^\/gsd:/));
-  if (gsdCmds.length > 0) {
-    if (parts.length) parts.push('');
-    parts.push('**Commands:**');
-    gsdCmds.forEach(c => parts.push(`\`${c}\``));
-    foundContent = true;
+  // ── GSD "Next Up" menu ────────────────────────────────────────────────────
+  if (!foundContent) {
+    const nextUpIdx = meaningful.findIndex(l => /next\s*up/i.test(l));
+    if (nextUpIdx >= 0) {
+      parts.push('**▶ Next up:**');
+      const nextLines = meaningful.slice(nextUpIdx + 1, nextUpIdx + 6)
+        .filter(l => l && !l.match(/^[─\s]+$/) && !/also\s*available/i.test(l) && !l.match(/^\/gsd:/) && !l.startsWith('-'))
+        .slice(0, 4);
+      nextLines.forEach(l => parts.push(`> ${l}`));
+      foundContent = true;
+    }
+
+    // GSD commands
+    const gsdCmds = meaningful.filter(l => l.match(/^\/gsd:/));
+    if (gsdCmds.length > 0) {
+      if (parts.length) parts.push('');
+      parts.push('**Commands:**');
+      gsdCmds.forEach(c => parts.push(`\`${c}\``));
+      foundContent = true;
+    }
+
+    // Also available
+    const alsoIdx = meaningful.findIndex(l => /also\s*available/i.test(l));
+    if (alsoIdx >= 0) {
+      const alsoLines = meaningful.slice(alsoIdx + 1, alsoIdx + 6)
+        .filter(l => l.startsWith('-') || l.startsWith('•') || l.startsWith('/'));
+      if (alsoLines.length > 0) {
+        if (parts.length) parts.push('');
+        parts.push('**Also available:**');
+        alsoLines.forEach(l => parts.push(`  ${l}`));
+        foundContent = true;
+      }
+    }
   }
 
-  // Numbered options (e.g. "1. Trust and proceed")
+  // ── Numbered options (permission prompts) ─────────────────────────────────
   const numberedOpts = meaningful.filter(l => l.match(/^\d+[.)]\s+\S/));
   if (numberedOpts.length > 0) {
     if (parts.length) parts.push('');
@@ -154,31 +216,9 @@ function formatPane(raw) {
     foundContent = true;
   }
 
-  // Also available section
-  const alsoIdx = meaningful.findIndex(l => /also\s*available/i.test(l));
-  if (alsoIdx >= 0) {
-    const alsoLines = meaningful.slice(alsoIdx + 1, alsoIdx + 6)
-      .filter(l => l.startsWith('-') || l.startsWith('•') || l.startsWith('/'));
-    if (alsoLines.length > 0) {
-      if (parts.length) parts.push('');
-      parts.push('**Also available:**');
-      alsoLines.forEach(l => parts.push(`  ${l}`));
-      foundContent = true;
-    }
-  }
-
-  // Permission / elicitation prompts — find the question line
-  const questionLine = meaningful.find(l =>
-    l.match(/\?$/) || l.match(/allow|deny|permission|do you want/i)
-  );
-  if (!foundContent && questionLine) {
-    parts.push(`**${questionLine}**`);
-    foundContent = true;
-  }
-
-  // Fallback: last 6 meaningful lines
+  // ── Fallback: show last 10 meaningful lines ───────────────────────────────
   if (!foundContent) {
-    meaningful.slice(-6).forEach(l => parts.push(l));
+    meaningful.slice(-10).forEach(l => parts.push(l));
   }
 
   return parts.join('\n').trim();
