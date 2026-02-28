@@ -233,8 +233,11 @@ function formatPane(raw) {
     }
   }
 
-  // ── Numbered options (permission prompts) ─────────────────────────────────
-  const numberedOpts = meaningful.filter(l => l.match(/^\d+[.)]\s+\S/));
+  // ── Numbered options (permission prompts only — not GSD plan summaries) ──
+  // GSD plan summaries look like "1. 01-01: Plan name" — skip those
+  const numberedOpts = meaningful.filter(l =>
+    l.match(/^\d+[.)]\s+\S/) && !l.match(/^\d+[.)]\s+\d{2}-\d{2}:/)
+  );
   if (numberedOpts.length > 0) {
     if (parts.length) parts.push('');
     parts.push('**Options:**');
