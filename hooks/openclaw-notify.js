@@ -128,12 +128,24 @@ function formatPane(raw) {
   let foundContent = false;
 
   // ── Checkpoint / Human Verify ──────────────────────────────────────────────
-  const checkpointIdx = meaningful.findIndex(l => /checkpoint|human.?verify/i.test(l));
+  const checkpointIdx = meaningful.findIndex(l => /checkpoint|human.{0,12}verif/i.test(l));
   if (checkpointIdx >= 0) {
     // Plan title
     const planLine = meaningful.slice(checkpointIdx, checkpointIdx + 4).find(l => /^Plan:/i.test(l));
-    if (planLine) parts.push(`**🔍 ${planLine}**`);
-    else parts.push(`**🔍 Human Checkpoint**`);
+    if (planLine) {
+      parts.push(`**🔍 ${planLine}**`);
+    } else {
+      // Use the checkpoint line itself, strip leading symbols
+      const title = meaningful[checkpointIdx].replace(/^[⏺✓•✗\s]+/, '').trim();
+      parts.push(`**🔍 ${title}**`);
+    }
+
+    // Summary line (e.g. "All 6 automated checks passed...")
+    const summaryLine = meaningful.slice(checkpointIdx, checkpointIdx + 8)
+      .find(l => /checks? passed|automated|items? need/i.test(l));
+    if (summaryLine) {
+      parts.push(`> ${summaryLine}`);
+    }
 
     // What's ready summary
     const readyIdx = meaningful.findIndex(l => /what.?s ready/i.test(l));
@@ -162,11 +174,25 @@ function formatPane(raw) {
       }
     }
 
-    // Expected reply
-    const replyIdx = meaningful.findIndex(l => /type\s+["']?\w/i.test(l));
-    if (replyIdx >= 0) {
+    // Confirmation items (bullet points under the checkpoint)
+    const confirmItems = meaningful.slice(checkpointIdx, checkpointIdx + 15)
+      .filter(l => l.startsWith('-') && l.length > 2).slice(0, 3);
+    if (confirmItems.length) {
       parts.push('');
-      parts.push('**💬 Reply:** ' + meaningful[replyIdx].replace(/^Type\s+/i, ''));
+      parts.push('**Confirm:**');
+      confirmItems.forEach(l => parts.push(`  ${l}`));
+    }
+
+    // Expected reply — extract the key word from "Type X" instruction
+    const replyIdx = meaningful.findIndex(l => /type\s+["'`]?\w/i.test(l));
+    if (replyIdx >= 0) {
+      const typeMatch = meaningful[replyIdx].match(/type\s+["'`]?(\w+)/i);
+      const keyword = typeMatch ? `\`${typeMatch[1]}\`` : '"approved"';
+      parts.push('');
+      parts.push(`**👉 Reply:** ${keyword} to confirm, or describe any issues`);
+    } else {
+      parts.push('');
+      parts.push('**👉 Reply:** `approved` or describe any issues');
     }
 
     foundContent = true;
