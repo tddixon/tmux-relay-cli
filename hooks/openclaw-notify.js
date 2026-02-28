@@ -242,9 +242,12 @@ function formatPane(raw) {
     foundContent = true;
   }
 
-  // ── Fallback: show last 10 meaningful lines ───────────────────────────────
+  // ── Fallback: raw pane in code block ─────────────────────────────────────
   if (!foundContent) {
-    meaningful.slice(-10).forEach(l => parts.push(l));
+    const rawFallback = meaningful.slice(-20).join('\n');
+    parts.push('```');
+    parts.push(rawFallback);
+    parts.push('```');
   }
 
   return parts.join('\n').trim();
