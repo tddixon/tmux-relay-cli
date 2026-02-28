@@ -100,9 +100,92 @@ try {
   paneContext = message;
 }
 
-// Format Discord notification
-const shortPane = paneContext.slice(-800).trim();
-const notifBody = shortPane || message;
+// --- Pane Formatter ---
+// Parses raw tmux output into a clean, readable Discord message
+function stripAnsi(str) {
+  return str.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b[()][A-Z0-9]/g, '');
+}
+
+function formatPane(raw) {
+  const noAnsi = stripAnsi(raw);
+  const lines = noAnsi.split('\n')
+    .map(l => l.replace(/[━─┌┐└┘├┤┬┴┼│╔╗╚╝╠╣╦╩╬═]/g, '').trim())
+    .filter(l => l.length > 0);
+
+  // Filter out pure decoration / GSD banner lines
+  const meaningful = lines.filter(l =>
+    !l.match(/^GSD\s*[►▶]/) &&
+    !l.match(/^[░▒▓█\s]+$/) &&
+    !l.match(/^⏵⏵/) &&
+    !l.match(/^⬆/) &&
+    !l.match(/^\d+%$/)
+  );
+
+  const parts = [];
+  let foundContent = false;
+
+  // Next Up section
+  const nextUpIdx = meaningful.findIndex(l => /next\s*up/i.test(l));
+  if (nextUpIdx >= 0) {
+    parts.push('**▶ Next up:**');
+    const nextLines = meaningful.slice(nextUpIdx + 1, nextUpIdx + 6)
+      .filter(l => l && !l.match(/^[─\s]+$/) && !/also\s*available/i.test(l) && !l.match(/^\/gsd:/) && !l.startsWith('-'))
+      .slice(0, 4);
+    nextLines.forEach(l => parts.push(`> ${l}`));
+    foundContent = true;
+  }
+
+  // GSD commands
+  const gsdCmds = meaningful.filter(l => l.match(/^\/gsd:/));
+  if (gsdCmds.length > 0) {
+    if (parts.length) parts.push('');
+    parts.push('**Commands:**');
+    gsdCmds.forEach(c => parts.push(`\`${c}\``));
+    foundContent = true;
+  }
+
+  // Numbered options (e.g. "1. Trust and proceed")
+  const numberedOpts = meaningful.filter(l => l.match(/^\d+[.)]\s+\S/));
+  if (numberedOpts.length > 0) {
+    if (parts.length) parts.push('');
+    parts.push('**Options:**');
+    numberedOpts.forEach(o => parts.push(o));
+    foundContent = true;
+  }
+
+  // Also available section
+  const alsoIdx = meaningful.findIndex(l => /also\s*available/i.test(l));
+  if (alsoIdx >= 0) {
+    const alsoLines = meaningful.slice(alsoIdx + 1, alsoIdx + 6)
+      .filter(l => l.startsWith('-') || l.startsWith('•') || l.startsWith('/'));
+    if (alsoLines.length > 0) {
+      if (parts.length) parts.push('');
+      parts.push('**Also available:**');
+      alsoLines.forEach(l => parts.push(`  ${l}`));
+      foundContent = true;
+    }
+  }
+
+  // Permission / elicitation prompts — find the question line
+  const questionLine = meaningful.find(l =>
+    l.match(/\?$/) || l.match(/allow|deny|permission|do you want/i)
+  );
+  if (!foundContent && questionLine) {
+    parts.push(`**${questionLine}**`);
+    foundContent = true;
+  }
+
+  // Fallback: last 6 meaningful lines
+  if (!foundContent) {
+    meaningful.slice(-6).forEach(l => parts.push(l));
+  }
+
+  return parts.join('\n').trim();
+}
+
+// Format notification body
+const formattedPane = formatPane(paneContext);
+const notifBody = formattedPane || message;
 
 // Check for an existing open thread for this session
 const threadFile = `/tmp/discord-thread-${sessionName}.json`;
@@ -120,9 +203,9 @@ if (existingThread) {
   log(`Reusing thread ${existingThread.threadId} for ${sessionName}`);
   const followupMsg = [
     `🤖 **${sessionName}** needs input again`,
-    `\`\`\``,
+    ``,
     notifBody,
-    `\`\`\``,
+    ``,
     `Reply here to route back.`
   ].join('\n');
 
@@ -142,11 +225,11 @@ if (existingThread) {
   // Create a new thread for this session
   const initialMsg = [
     `🤖 **${sessionName}** is waiting for input`,
-    `\`\`\``,
+    ``,
     notifBody,
-    `\`\`\``,
+    ``,
     `Reply with a number or free text — I'll route it back.`,
-    `_session: \`${sessionName}\` | socket: \`${SOCKET}\`_`
+    `-# session: \`${sessionName}\``
   ].join('\n');
 
   log(`Creating Discord thread for ${sessionName}...`);
