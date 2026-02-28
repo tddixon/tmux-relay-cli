@@ -13,7 +13,12 @@ const DISCORD_CHANNEL_DEFAULT = '1476953824911425617'; // #dev-4 fallback
 const DISCORD_MENTION = '<@1080149602520547368>'; // Trevor
 const OPENCLAW = '/opt/homebrew/bin/openclaw';
 const TMPDIR = process.env.TMPDIR || '/tmp';
-const SOCKET = `${TMPDIR}clawdbot-tmux-sockets/clawdbot.sock`;
+// Try TMPDIR socket first, fall back to /tmp (some sessions use old hardcoded path)
+const SOCKET_CANDIDATES = [
+  `${TMPDIR}clawdbot-tmux-sockets/clawdbot.sock`,
+  `/tmp/clawdbot-tmux-sockets/clawdbot.sock`
+].filter((s, i, a) => a.indexOf(s) === i); // dedupe if TMPDIR=/tmp/
+let SOCKET = SOCKET_CANDIDATES[0]; // default, overridden below once session found
 const LOG = '/tmp/openclaw-notify-debug.log';
 
 function log(msg) {
@@ -70,6 +75,13 @@ try {
   }
 } catch(e) { /* no config file — use default */ }
 
+// Discover which socket this session is on (before writing state file)
+for (const candidate of SOCKET_CANDIDATES) {
+  const check = spawnSync('tmux', ['-S', candidate, 'has-session', '-t', sessionName],
+    { encoding: 'utf8', timeout: 2000 });
+  if (check.status === 0) { SOCKET = candidate; log(`Socket: ${SOCKET}`); break; }
+}
+
 // Write pending relay state file
 const stateFile = `/tmp/pending-relay-${sessionName}.json`;
 const state = {
@@ -89,8 +101,10 @@ try {
   log(`State file write failed: ${e.message}`);
 }
 
-// Capture tmux pane — retry up to 4x with 1s delay if pane comes back empty
+// Discover which socket this session lives on, then capture pane
+// Retry up to 4x with 1s delay (hook can fire mid-transition when pane is blank)
 let paneContext = '';
+
 for (let attempt = 0; attempt < 4; attempt++) {
   try {
     if (attempt > 0) {
