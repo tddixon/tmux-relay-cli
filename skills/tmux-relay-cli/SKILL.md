@@ -269,9 +269,69 @@ The installer adds this entry under `hooks.Notification`:
 
 ---
 
+## Natural Language Intent Resolution
+
+When Trevor replies in a Discord thread with natural language (not a bare number or slash command), MAIN reads the current pane content and maps the reply to the right command before routing.
+
+### Resolution rules
+
+| Trevor says | Resolves to |
+|-------------|-------------|
+| Bare number: `"1"`, `"2"`, `"3"` | Used as-is — sends that many Down presses + Enter |
+| Slash command: `/gsd:plan-phase 1` | Used as-is — sent as literal text |
+| `"yes"` / `"continue"` / `"proceed"` / `"ok"` / `"go"` / `"go ahead"` | Option 1 (or Enter if only one option) |
+| `"no"` / `"abort"` / `"stop"` / `"cancel"` / `"skip"` | Whichever option matches cancel/no/abort/skip in the pane |
+| `"discuss"` / `"talk through"` / `"before planning"` | Whichever option matches discuss/review/before |
+| `"just build it"` / `"do it"` / `"just do it"` | Option 1 (proceed) |
+| Anything else (free text) | Sent literally with C-u + text + Enter |
+
+### Resolution process
+
+1. **Capture the pane** to get the exact question and option list currently showing
+2. **Classify the reply:**
+   - Pure integer string → option mode (no LLM needed)
+   - Starts with `/` → slash command (no LLM needed)
+   - Otherwise → fuzzy match against option labels in pane
+3. **Fuzzy match** — find the option whose label most closely matches the intent
+4. **Fallback** — if no option matches, send as free text
+5. **Confirm** — always tell Trevor what was actually sent, especially when natural language was interpreted
+
+### When unsure
+
+If the intent is genuinely ambiguous (multiple plausible options, none clearly matching):
+- Send the best guess
+- Clearly state what you sent and why
+- Example: `✅ Sent option 2 ("No, skip context") — interpreted "skip" as the skip option`
+
+---
+
+## Discord Channel Configuration
+
+### Changing the channel ID
+
+By default the hook sends to the channel hardcoded in `hooks/openclaw-notify.js`:
+
+```js
+const DISCORD_CHANNEL = '1476953824911425617'; // #dev-4
+```
+
+To change it:
+
+1. Edit `~/projects/tmux-relay-cli/hooks/openclaw-notify.js`
+2. Change the `DISCORD_CHANNEL` constant to your target channel ID
+3. Reinstall the hook: `npm run install-hook`
+
+To get a Discord channel ID: Enable Developer Mode in Discord → right-click any channel → **Copy Channel ID**.
+
+### Finding the installed copy
+
+The installed hook lives at `~/.claude/hooks/openclaw-notify.js`. If you edit this directly, your changes will be overwritten next time `install-hook` is run. Edit the source in `~/projects/tmux-relay-cli/hooks/` instead.
+
+---
+
 ## MAIN agent response protocol
 
-When MAIN receives a system event whose text starts with `claude-relay-pending`:
+### Part 1 — When MAIN receives a system event starting with `claude-relay-pending`
 
 **Step 1 — Read state file**
 ```bash
@@ -281,32 +341,84 @@ cat /tmp/pending-relay-<session>.json
 
 **Step 2 — Capture pane for full context**
 ```bash
-tmux -S /tmp/clawdbot-tmux-sockets/clawdbot.sock \
-  capture-pane -p -J -t <session>:0.0 -S -30
+tmux -S <socket> capture-pane -p -J -t <session>:0.0 -S -30
 # Returns the last 30 lines of the pane — includes the question text and option list
 ```
 
 **Step 3 — Format and send Discord notification**
+
+Find or create a Discord thread named `<session>` in the configured channel.
+
 ```
 🤖 **<session>** needs input
 
-<question text from pane capture>
+<pane capture showing question + options>
 
-Reply with a number or free text — I'll route it.
+Reply with a number or free text — I'll route it back.
 ```
 
 **Step 4 — Save context**
 
-Store `{ session, socket, pane, options }` in working context so it's ready when Trevor replies.
+Store `{ session, socket, pane }` in working context so it's ready when Trevor replies.
 
-**Step 5 — Route Trevor's reply**
+---
+
+### Part 2 — When MAIN receives a Discord reply in a relay thread
+
+**Step 1 — Run relay-check.js with the inbound chat_id**
 ```bash
-echo '{
-  "reply": "<Trevor reply>",
-  "session": "<session>",
-  "socket": "/tmp/clawdbot-tmux-sockets/clawdbot.sock",
-  "options": ["<option1>", "<option2>", ...]
-}' | tmux-relay
+node /Users/clawd/projects/tmux-relay-cli/scripts/relay-check.js "<chat_id>"
+# chat_id example: "channel:1476953824911425617:thread:1477207778727563457"
+```
+
+Returns:
+```json
+{
+  "matched": true,
+  "session": "claude-nomads-ops-center",
+  "socket": "/tmp/.../clawdbot.sock",
+  "pane": "0.0",
+  "stateFile": "/tmp/pending-relay-claude-nomads-ops-center.json"
+}
+```
+
+If `matched: false` → treat message as normal conversation.
+If `matched: false, ambiguous: true` → multiple sessions pending, ask Trevor which one.
+
+**Step 2 — Capture the current pane**
+```bash
+tmux -S <socket> capture-pane -p -J -t <session>:0.0 -S -25
+# Read the question text and option list currently showing
+```
+
+**Step 3 — Resolve intent**
+
+- Bare number (`"1"`, `"2"`) → use as-is
+- Slash command (`/gsd:...`) → use as-is
+- Natural language → match against pane options (see Natural Language Intent Resolution above)
+- Ambiguous → send best guess, explain in reply
+
+**Step 4 — Call tmux-relay with the RESOLVED command**
+```bash
+tmux-relay --session <session> --socket <socket> --reply "<resolved_command>"
+```
+
+**Step 5 — React ✅ and confirm**
+```
+message.react ✅
+```
+Reply with:
+```
+✅ Sent `<resolved_command>` → `<session>`
+```
+If natural language was interpreted, add a brief explanation:
+```
+✅ Sent `1` → `claude-nomads-ops-center`  (interpreted "continue" as option 1)
+```
+
+**Step 6 — Delete the state file**
+```bash
+rm /tmp/pending-relay-<session>.json
 ```
 
 ---
