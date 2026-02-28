@@ -1,0 +1,14 @@
+{
+  "name": "tmux-relay-cli",
+  "version": "1.0.0",
+  "description": "Routes Lobster workflow approvals back to tmux sessions (Claude Code relay)",
+  "bin": {
+    "tmux-relay": "./bin/tmux-relay.js"
+  },
+  "scripts": {
+    "test": "node test/test.js",
+    "install-hook": "node scripts/install-hook.js"
+  },
+  "keywords": ["tmux", "lobster", "openclaw", "claude-code", "relay"],
+  "license": "MIT"
+}
