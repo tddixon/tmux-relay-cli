@@ -10,6 +10,7 @@ const path = require('path');
 const { execSync, spawnSync } = require('child_process');
 
 const DISCORD_CHANNEL = '1476953824911425617'; // #dev-4
+const DISCORD_MENTION = '<@1080149602520547368>'; // Trevor
 const OPENCLAW = '/opt/homebrew/bin/openclaw';
 const TMPDIR = process.env.TMPDIR || '/tmp';
 const SOCKET = `${TMPDIR}clawdbot-tmux-sockets/clawdbot.sock`;
@@ -202,7 +203,7 @@ if (existingThread) {
   // Post follow-up into the existing thread
   log(`Reusing thread ${existingThread.threadId} for ${sessionName}`);
   const followupMsg = [
-    `🤖 **${sessionName}** needs input again`,
+    `${DISCORD_MENTION} 🤖 **${sessionName}** needs input again`,
     ``,
     notifBody,
     ``,
@@ -224,7 +225,7 @@ if (existingThread) {
 } else {
   // Create a new thread for this session
   const initialMsg = [
-    `🤖 **${sessionName}** is waiting for input`,
+    `${DISCORD_MENTION} 🤖 **${sessionName}** is waiting for input`,
     ``,
     notifBody,
     ``,
